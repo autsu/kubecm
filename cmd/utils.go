@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,8 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/client-go/rest"
-
 	"github.com/bndr/gotabulate"
 	ct "github.com/daviddengcn/go-colortext"
 	"github.com/imdario/mergo"
@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	v "k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	clientcmdlatest "k8s.io/client-go/tools/clientcmd/api/latest"
@@ -497,4 +498,74 @@ func MacNotifier(msg string) error {
 // isMacOs check if current system is macOS
 func isMacOs() bool {
 	return r.GOOS == "darwin"
+}
+
+// PrintTableWithAuth generate json
+// base64 后的数据太长了，表格显示效果很差，不如直接输出成 JSON
+func PrintTableWithAuth(config *clientcmdapi.Config) error {
+	type AuthInfo struct {
+		Name     string
+		Cluster  string
+		User     string
+		Server   string
+		CertData string
+		KeyData  string
+		CaData   string
+	}
+
+	var datas []AuthInfo
+	sortedKeys := make([]string, 0)
+
+	for k := range config.Contexts {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+	ctx := config.Contexts
+	for _, k := range sortedKeys {
+		userAuth := config.AuthInfos[ctx[k].AuthInfo]
+		if userAuth == nil {
+			continue
+		}
+
+		if config.Clusters == nil {
+			continue
+		}
+
+		certData := base64.StdEncoding.EncodeToString(userAuth.ClientCertificateData)
+		keyData := base64.StdEncoding.EncodeToString(userAuth.ClientKeyData)
+
+		//certData := string(userAuth.ClientCertificateData)
+		//keyData := string(userAuth.ClientKeyData)
+		//caData := string(cluster.CertificateAuthorityData)
+
+		cluster, ok := config.Clusters[ctx[k].Cluster]
+		if !ok {
+			continue
+		}
+
+		caData := base64.StdEncoding.EncodeToString(cluster.CertificateAuthorityData)
+
+		//conTmp := []string{k, ctx[k].Cluster, ctx[k].AuthInfo, cluster.Server, certData, keyData, caData}
+		//table = append(table, conTmp)
+		datas = append(datas, AuthInfo{
+			Name:     k,
+			Cluster:  ctx[k].Cluster,
+			User:     ctx[k].AuthInfo,
+			Server:   cluster.Server,
+			CertData: certData,
+			KeyData:  keyData,
+			CaData:   caData,
+		})
+	}
+
+	if len(datas) != 0 {
+		j, err := json.MarshalIndent(datas, "", "    ")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(string(j))
+	} else {
+		return errors.New("context not found")
+	}
+	return nil
 }
